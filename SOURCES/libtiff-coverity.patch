@@ -1,0 +1,262 @@
+From 7704f4b45c7808a6ea73d4b6684f36124ba37c11 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Nikola=20Forr=C3=B3?= <nforro@redhat.com>
+Date: Wed, 12 Jun 2019 13:57:49 +0200
+Subject: [PATCH] Fix important Covscan defects
+
+---
+ contrib/addtiffo/tif_ovrcache.c |  1 +
+ contrib/iptcutil/iptcutil.c     |  4 +++-
+ libtiff/tif_ojpeg.c             | 10 ++++++++++
+ libtiff/tif_open.c              |  1 +
+ test/ascii_tag.c                |  2 +-
+ test/long_tag.c                 |  2 +-
+ test/short_tag.c                |  2 +-
+ test/strip.c                    |  2 +-
+ tools/tiff2pdf.c                |  2 ++
+ tools/tiffcp.c                  |  6 +++++-
+ tools/tiffcrop.c                |  1 +
+ tools/tiffdither.c              |  3 ++-
+ tools/tiffsplit.c               |  2 ++
+ 13 files changed, 31 insertions(+), 7 deletions(-)
+
+diff --git a/contrib/addtiffo/tif_ovrcache.c b/contrib/addtiffo/tif_ovrcache.c
+index 646b534..1d183ab 100644
+--- a/contrib/addtiffo/tif_ovrcache.c
++++ b/contrib/addtiffo/tif_ovrcache.c
+@@ -110,6 +110,7 @@ TIFFOvrCache *TIFFCreateOvrCache( TIFF *hTIFF, int nDirOffset )
+ 		TIFFErrorExt( hTIFF->tif_clientdata, hTIFF->tif_name,
+ 					  "Can't allocate memory for overview cache." );
+         /* TODO: use of TIFFError is inconsistent with use of fprintf in addtiffo.c, sort out */
++        _TIFFfree( psCache );
+         return NULL;
+     }
+ 
+diff --git a/contrib/iptcutil/iptcutil.c b/contrib/iptcutil/iptcutil.c
+index 557a67e..b6be247 100644
+--- a/contrib/iptcutil/iptcutil.c
++++ b/contrib/iptcutil/iptcutil.c
+@@ -293,8 +293,10 @@ int formatIPTC(FILE *ifile, FILE *ofile)
+     for (tagindx=0; tagindx<taglen; tagindx++)
+     {
+       c = str[tagindx] = getc(ifile);
+-      if (c == EOF)
++      if (c == EOF) {
++        free(str);
+         return -1;
++      }
+     }
+     str[ taglen ] = 0;
+ 
+diff --git a/libtiff/tif_ojpeg.c b/libtiff/tif_ojpeg.c
+index 336d47d..3005dcd 100644
+--- a/libtiff/tif_ojpeg.c
++++ b/libtiff/tif_ojpeg.c
+@@ -1392,11 +1392,15 @@ OJPEGReadHeaderInfoSecStreamDqt(TIFF* tif)
+ 			nb[sizeof(uint32)+2]=0;
+ 			nb[sizeof(uint32)+3]=67;
+ 			if (OJPEGReadBlock(sp,65,&nb[sizeof(uint32)+4])==0)
++			{
++				_TIFFfree(nb);
+ 				return(0);
++			}
+ 			o=nb[sizeof(uint32)+4]&15;
+ 			if (3<o)
+ 			{
+ 				TIFFErrorExt(tif->tif_clientdata,module,"Corrupt DQT marker in JPEG data");
++				_TIFFfree(nb);
+ 				return(0);
+ 			}
+ 			if (sp->qtable[o]!=0)
+@@ -1446,13 +1450,17 @@ OJPEGReadHeaderInfoSecStreamDht(TIFF* tif)
+ 		nb[sizeof(uint32)+2]=(m>>8);
+ 		nb[sizeof(uint32)+3]=(m&255);
+ 		if (OJPEGReadBlock(sp,m-2,&nb[sizeof(uint32)+4])==0)
++		{
++			_TIFFfree(nb);
+ 			return(0);
++		}
+ 		o=nb[sizeof(uint32)+4];
+ 		if ((o&240)==0)
+ 		{
+ 			if (3<o)
+ 			{
+ 				TIFFErrorExt(tif->tif_clientdata,module,"Corrupt DHT marker in JPEG data");
++				_TIFFfree(nb);
+ 				return(0);
+ 			}
+ 			if (sp->dctable[o]!=0)
+@@ -1464,12 +1472,14 @@ OJPEGReadHeaderInfoSecStreamDht(TIFF* tif)
+ 			if ((o&240)!=16)
+ 			{
+ 				TIFFErrorExt(tif->tif_clientdata,module,"Corrupt DHT marker in JPEG data");
++				_TIFFfree(nb);
+ 				return(0);
+ 			}
+ 			o&=15;
+ 			if (3<o)
+ 			{
+ 				TIFFErrorExt(tif->tif_clientdata,module,"Corrupt DHT marker in JPEG data");
++				_TIFFfree(nb);
+ 				return(0);
+ 			}
+ 			if (sp->actable[o]!=0)
+diff --git a/libtiff/tif_open.c b/libtiff/tif_open.c
+index 3b3b2ce..7578275 100644
+--- a/libtiff/tif_open.c
++++ b/libtiff/tif_open.c
+@@ -175,6 +175,7 @@ TIFFClientOpen(
+ 	if (!readproc || !writeproc || !seekproc || !closeproc || !sizeproc) {
+ 		TIFFErrorExt(clientdata, module,
+ 			  "One of the client procedures is NULL pointer.");
++		_TIFFfree(tif);
+ 		goto bad2;
+ 	}
+ 	tif->tif_readproc = readproc;
+diff --git a/test/ascii_tag.c b/test/ascii_tag.c
+index bf81212..0e85c8f 100644
+--- a/test/ascii_tag.c
++++ b/test/ascii_tag.c
+@@ -125,7 +125,7 @@ main(int argc, char **argv)
+ 	}
+ 
+ 	/* Write dummy pixel data. */
+-	if (!TIFFWriteScanline(tif, buf, 0, 0) < 0) {
++	if (TIFFWriteScanline(tif, buf, 0, 0) == -1) {
+ 		fprintf (stderr, "Can't write image data.\n");
+ 		goto failure;
+ 	}
+diff --git a/test/long_tag.c b/test/long_tag.c
+index 256bc8e..e895ee4 100644
+--- a/test/long_tag.c
++++ b/test/long_tag.c
+@@ -109,7 +109,7 @@ main(int argc, char **argv)
+ 	}
+ 
+ 	/* Write dummy pixel data. */
+-	if (!TIFFWriteScanline(tif, buf, 0, 0) < 0) {
++	if (TIFFWriteScanline(tif, buf, 0, 0) == -1) {
+ 		fprintf (stderr, "Can't write image data.\n");
+ 		goto failure;
+ 	}
+diff --git a/test/short_tag.c b/test/short_tag.c
+index 45214e1..c9e0c21 100644
+--- a/test/short_tag.c
++++ b/test/short_tag.c
+@@ -123,7 +123,7 @@ main(int argc, char **argv)
+ 	}
+ 
+ 	/* Write dummy pixel data. */
+-	if (!TIFFWriteScanline(tif, buf, 0, 0) < 0) {
++	if (TIFFWriteScanline(tif, buf, 0, 0) == -1) {
+ 		fprintf (stderr, "Can't write image data.\n");
+ 		goto failure;
+ 	}
+diff --git a/test/strip.c b/test/strip.c
+index df6406e..ab7f5ef 100644
+--- a/test/strip.c
++++ b/test/strip.c
+@@ -278,7 +278,7 @@ write_scanlines(TIFF *tif, const tdata_t array, const tsize_t size)
+ 	}
+ 
+ 	for (offset = 0, row = 0; row < length; offset+=scanlinesize, row++) {
+-		if (TIFFWriteScanline(tif, (char *)array + offset, row, 0) < 0) {
++		if (TIFFWriteScanline(tif, (char *)array + offset, row, 0) == -1) {
+ 			fprintf (stderr,
+ 				 "Can't write image data at row %u.\n", row);
+ 			return -1;
+diff --git a/tools/tiff2pdf.c b/tools/tiff2pdf.c
+index ac5d70d..a4ce325 100644
+--- a/tools/tiff2pdf.c
++++ b/tools/tiff2pdf.c
+@@ -2440,6 +2440,7 @@ tsize_t t2p_readwrite_pdf_image(T2P* t2p, TIFF* input, TIFF* output){
+ 					t2p->tiff_datasize, 
+ 					TIFFFileName(input));
+ 				t2p->t2p_error = T2P_ERR_ERROR;
++				_TIFFfree(buffer);
+ 				return(0);
+ 			}
+ 			for(i=0;i<stripcount;i++){
+@@ -2919,6 +2920,7 @@ tsize_t t2p_readwrite_pdf_image_tile(T2P* t2p, TIFF* input, TIFF* output, ttile_
+ 					t2p->tiff_datasize, 
+ 					TIFFFileName(input));
+ 				t2p->t2p_error = T2P_ERR_ERROR;
++				_TIFFfree(buffer);
+ 				return(0);
+ 			}
+ 			samplebufferoffset=0;
+diff --git a/tools/tiffcp.c b/tools/tiffcp.c
+index 48319fa..a54e65d 100644
+--- a/tools/tiffcp.c
++++ b/tools/tiffcp.c
+@@ -1191,10 +1191,14 @@ DECLAREreadFunc(readSeparateStripsIntoBuffer)
+ {
+ 	int status = 1;
+ 	tsize_t scanlinesize = TIFFScanlineSize(in);
+-	tdata_t scanline = _TIFFmalloc(scanlinesize);
++	tdata_t scanline;
+ 	if (!scanlinesize)
+ 		return 0;
+ 
++	scanline = _TIFFmalloc(scanlinesize);
++	if (!scanline)
++		return 0;
++
+ 	(void) imagewidth;
+ 	if (scanline) {
+ 		uint8* bufp = (uint8*) buf;
+diff --git a/tools/tiffcrop.c b/tools/tiffcrop.c
+index 7684318..a5d0231 100644
+--- a/tools/tiffcrop.c
++++ b/tools/tiffcrop.c
+@@ -2576,6 +2576,7 @@ static void dump_info(FILE *dumpfile, int format, char *prefix, char *msg, ...)
+     fprintf(dumpfile, "%s ", prefix);
+     vfprintf(dumpfile, msg, ap);
+     fprintf(dumpfile, "\n");
++    va_end(ap);
+     }
+   }
+ 
+diff --git a/tools/tiffdither.c b/tools/tiffdither.c
+index 86160f2..5ceb314 100644
+--- a/tools/tiffdither.c
++++ b/tools/tiffdither.c
+@@ -77,7 +77,7 @@ fsdither(TIFF* in, TIFF* out)
+ 	 * Get first line
+ 	 */
+ 	if (TIFFReadScanline(in, inputline, 0, 0) <= 0)
+-		return;
++		goto skip_on_error;
+ 	inptr = inputline;
+ 	nextptr = nextline;
+ 	for (j = 0; j < imagewidth; ++j)
+@@ -128,6 +128,7 @@ fsdither(TIFF* in, TIFF* out)
+ 		if (TIFFWriteScanline(out, outline, i-1, 0) < 0)
+ 			break;
+ 	}
++skip_on_error:
+ 	_TIFFfree(inputline);
+ 	_TIFFfree(thisline);
+ 	_TIFFfree(nextline);
+diff --git a/tools/tiffsplit.c b/tools/tiffsplit.c
+index 135de2e..03b5558 100644
+--- a/tools/tiffsplit.c
++++ b/tools/tiffsplit.c
+@@ -239,6 +239,7 @@ cpStrips(TIFF* in, TIFF* out)
+ 
+ 		if (!TIFFGetField(in, TIFFTAG_STRIPBYTECOUNTS, &bytecounts)) {
+ 			fprintf(stderr, "tiffsplit: strip byte counts are missing\n");
++			_TIFFfree(buf);
+ 			return (0);
+ 		}
+ 		for (s = 0; s < ns; s++) {
+@@ -272,6 +273,7 @@ cpTiles(TIFF* in, TIFF* out)
+ 
+ 		if (!TIFFGetField(in, TIFFTAG_TILEBYTECOUNTS, &bytecounts)) {
+ 			fprintf(stderr, "tiffsplit: tile byte counts are missing\n");
++			_TIFFfree(buf);
+ 			return (0);
+ 		}
+ 		for (t = 0; t < nt; t++) {
+-- 
+2.21.0
+
